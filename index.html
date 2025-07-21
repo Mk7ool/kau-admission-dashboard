@@ -59,132 +59,137 @@
   <div class="chart-container"><canvas id="assignedPerLocation"></canvas></div>
   <div class="chart-container"><canvas id="genderDistribution"></canvas></div>
   <div class="chart-container"><canvas id="minScorePerProgram"></canvas></div>
+  <div class="chart-container"><canvas id="disabilityRatioPerProgram"></canvas></div>
 </div>
 
 <script>
 let originalData = [];
 
-const collegeFilter = document.getElementById('collegeFilter');
-const genderFilter = document.getElementById('genderFilter');
-const locationFilter = document.getElementById('locationFilter');
-const programFilter = document.getElementById('programFilter');
+const uploadInput = document.getElementById("upload");
+const collegeFilter = document.getElementById("collegeFilter");
+const genderFilter = document.getElementById("genderFilter");
+const locationFilter = document.getElementById("locationFilter");
+const programFilter = document.getElementById("programFilter");
 
-function resetDashboard() {
-  document.getElementById("statsCards").innerHTML = "";
-  ["assignedPerCollege","assignedPerProgram","assignedPerLocation","genderDistribution","minScorePerProgram"].forEach(id => {
-    if (window[id + "_instance"]) {
-      window[id + "_instance"].destroy();
-      window[id + "_instance"] = null;
-    }
-  });
-}
-
-function populateFilters(data) {
-  const collegeSet = new Set();
-  const locationSet = new Set();
-  const programSet = new Set();
-
-  data.forEach(row => {
-    if (row["الكلية"]) collegeSet.add(row["الكلية"]);
-    if (row["الموقع"]) locationSet.add(row["الموقع"]);
-    if (row["التخصص"]) programSet.add(row["التخصص"].includes("عام") ? `${row["التخصص"]} (${row["الكلية"]})` : row["التخصص"]);
-  });
-
-  const populate = (id, set) => {
-    const select = document.getElementById(id);
-    const first = select.options[0];
-    select.innerHTML = "";
-    select.appendChild(first);
-    [...set].sort().forEach(val => {
-      const opt = document.createElement("option");
-      opt.value = val;
-      opt.textContent = val;
-      select.appendChild(opt);
-    });
-  };
-
-  populate("collegeFilter", collegeSet);
-  populate("locationFilter", locationSet);
-  populate("programFilter", programSet);
-}
-
-function filterAndGenerate() {
-  const filtered = originalData.filter(row =>
-    (!collegeFilter.value || row["الكلية"] === collegeFilter.value) &&
-    (!genderFilter.value || row["الجنس"] === genderFilter.value) &&
-    (!locationFilter.value || row["الموقع"] === locationFilter.value) &&
-    (!programFilter.value || (row["التخصص"]?.includes("عام") ? `${row["التخصص"]} (${row["الكلية"]})` : row["التخصص"]) === programFilter.value)
-  );
-  generateDashboard(filtered);
-}
-
-["collegeFilter", "genderFilter", "locationFilter", "programFilter"].forEach(id => {
-  document.getElementById(id).addEventListener("change", filterAndGenerate);
-});
-
-document.getElementById('upload').addEventListener('change', function(e) {
+uploadInput.addEventListener("change", function (e) {
+  const file = e.target.files[0];
   const reader = new FileReader();
-  reader.onload = function(e) {
-    const data = new Uint8Array(e.target.result);
-    const workbook = XLSX.read(data, {type: 'array'});
+  reader.onload = function (evt) {
+    const data = new Uint8Array(evt.target.result);
+    const workbook = XLSX.read(data, { type: "array" });
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
     const json = XLSX.utils.sheet_to_json(sheet);
-    
     originalData = json;
     populateFilters(json);
-    generateDashboard(json);
+    updateDashboard(json);
   };
-  reader.readAsArrayBuffer(e.target.files[0]);
+  reader.readAsArrayBuffer(file);
 });
 
-function generateDashboard(data) {
-  resetDashboard();
-  const stats = { totalAccepted: 0, totalCapacity: 0, minScore: Infinity, maleAccepted: 0, femaleAccepted: 0 };
-  const acceptedByCollege = {}, acceptedByProgram = {}, acceptedByLocation = {}, minScoreByProgram = {};
+function populateFilters(data) {
+  const colleges = new Set();
+  const locations = new Set();
+  const programs = new Set();
+
+  data.forEach(row => {
+    colleges.add(row["الكلية"]);
+    locations.add(row["الموقع"]);
+    if (row["التخصص"]) {
+      programs.add(row["التخصص"].includes("عام") ? `${row["التخصص"]} (${row["الكلية"]})` : row["التخصص"]);
+    }
+  });
+
+  fillSelect(collegeFilter, colleges);
+  fillSelect(locationFilter, locations);
+  fillSelect(programFilter, programs);
+}
+
+function fillSelect(select, values) {
+  select.innerHTML = select.options[0].outerHTML;
+  Array.from(values).sort().forEach(val => {
+    const opt = document.createElement("option");
+    opt.value = val;
+    opt.textContent = val;
+    select.appendChild(opt);
+  });
+}
+
+[collegeFilter, genderFilter, locationFilter, programFilter].forEach(filter => {
+  filter.addEventListener("change", () => {
+    const filtered = originalData.filter(row =>
+      (!collegeFilter.value || row["الكلية"] === collegeFilter.value) &&
+      (!genderFilter.value || row["الجنس"] === genderFilter.value) &&
+      (!locationFilter.value || row["الموقع"] === locationFilter.value) &&
+      (!programFilter.value || (row["التخصص"]?.includes("عام") ? `${row["التخصص"]} (${row["الكلية"]})` : row["التخصص"]) === programFilter.value)
+    );
+    updateDashboard(filtered);
+  });
+});
+
+function updateDashboard(data) {
+  const stats = {
+    totalAssigned: 0,
+    totalCapacity: 0,
+    minScore: Infinity,
+    maleAssigned: 0,
+    femaleAssigned: 0,
+    disabledAssigned: 0
+  };
+
+  const assignedByCollege = {}, assignedByProgram = {}, assignedByLocation = {}, minScoreByProgram = {}, disabilityRatioByProgram = {};
 
   data.forEach(row => {
     const college = row["الكلية"];
-    const program = row["التخصص"]?.includes("عام") ? `${row["التخصص"]} (${college})` : row["التخصص"];
     const location = row["الموقع"];
     const gender = row["الجنس"];
-    const accepted = +row["عدد المعينين"] || 0;
     const capacity = +row["السعة"] || 0;
+    const assigned = +row["عدد المعينين"] || 0;
+    const disabled = +row["عدد المعينين من ذوي الإعاقة"] || 0;
     const score = +row["أقل نسبة موزونة"] || 0;
+    const program = row["التخصص"]?.includes("عام") ? `${row["التخصص"]} (${row["الكلية"]})` : row["التخصص"];
 
-    if (!program) return;
-
-    stats.totalAccepted += accepted;
+    stats.totalAssigned += assigned;
     stats.totalCapacity += capacity;
+    stats.disabledAssigned += disabled;
     if (score > 0 && score < stats.minScore) stats.minScore = score;
-    if (gender === "ذكر") stats.maleAccepted += accepted;
-    else if (gender === "أنثى") stats.femaleAccepted += accepted;
+    if (gender === "ذكر") stats.maleAssigned += assigned;
+    if (gender === "أنثى") stats.femaleAssigned += assigned;
 
-    acceptedByCollege[college] = (acceptedByCollege[college] || 0) + accepted;
-    acceptedByProgram[program] = (acceptedByProgram[program] || 0) + accepted;
-    acceptedByLocation[location] = (acceptedByLocation[location] || 0) + accepted;
-    if (!minScoreByProgram[program] || score < minScoreByProgram[program]) minScoreByProgram[program] = score;
+    if (college) assignedByCollege[college] = (assignedByCollege[college] || 0) + assigned;
+    if (program) assignedByProgram[program] = (assignedByProgram[program] || 0) + assigned;
+    if (location) assignedByLocation[location] = (assignedByLocation[location] || 0) + assigned;
+    if (program && score > 0) minScoreByProgram[program] = score;
+    if (program && assigned > 0) disabilityRatioByProgram[program] = +(disabled / assigned * 100).toFixed(1);
   });
 
   document.getElementById("statsCards").innerHTML = `
-    <div class="card"><h3>📦 عدد المقبولين</h3><p>${stats.totalAccepted.toLocaleString()}</p></div>
-    <div class="card"><h3>🎯 نسبة الإشغال</h3><p>${stats.totalCapacity ? ((stats.totalAccepted / stats.totalCapacity) * 100).toFixed(1) + "%" : "-"}</p></div>
+    <div class="card"><h3>📦 عدد المقبولين</h3><p>${stats.totalAssigned.toLocaleString()}</p></div>
+    <div class="card"><h3>🎯 نسبة الإشغال</h3><p>${stats.totalCapacity ? ((stats.totalAssigned / stats.totalCapacity) * 100).toFixed(1) + "%" : "-"}</p></div>
     <div class="card"><h3>📉 أقل نسبة موزونة</h3><p>${isFinite(stats.minScore) ? stats.minScore.toFixed(2) : "-"}</p></div>
-    <div class="card"><h3>👨 المقبولين طلاب</h3><p style="color: #1e88e5;">${stats.maleAccepted.toLocaleString()}</p></div>
-    <div class="card"><h3>👩 المقبولين طالبات</h3><p style="color: #c2185b;">${stats.femaleAccepted.toLocaleString()}</p></div>
+    <div class="card"><h3>👨 المقبولون طلاب</h3><p style="color: #1e88e5;">${stats.maleAssigned.toLocaleString()}</p></div>
+    <div class="card"><h3>👩 المقبولات طالبات</h3><p style="color: #c2185b;">${stats.femaleAssigned.toLocaleString()}</p></div>
+    <div class="card"><h3>♿ عدد المقبولين من ذوي الإعاقة</h3><p style="color: #6a1b9a;">${stats.disabledAssigned.toLocaleString()}</p></div>
   `;
 
-  drawChart("assignedPerCollege", "عدد المقبولين حسب الكلية", acceptedByCollege);
-  drawChart("assignedPerProgram", "عدد المقبولين حسب التخصص", acceptedByProgram);
-  drawChart("assignedPerLocation", "عدد المقبولين حسب الموقع", acceptedByLocation);
-  drawChart("genderDistri
-  drawChart("minScorePerProgram", "أقل نسبة موزونة لكل تخصص", minScoreByProgram);
+  const useGenderColors = !genderFilter.value;
+  drawChart("assignedPerCollege", "عدد المقبولين حسب الكلية", assignedByCollege, useGenderColors);
+  drawChart("assignedPerProgram", "عدد المقبولين حسب التخصص", assignedByProgram, useGenderColors);
+  drawChart("assignedPerLocation", "عدد المقبولين حسب الموقع", assignedByLocation, useGenderColors);
+  drawChart("genderDistribution", "توزيع المقبولين حسب الجنس", { "ذكور": stats.maleAssigned, "إناث": stats.femaleAssigned }, ["#1e88e5", "#c2185b"]);
+  drawChart("minScorePerProgram", "أقل نسبة موزونة لكل تخصص", minScoreByProgram, useGenderColors);
+  drawChart("disabilityRatioPerProgram", "نسبة المقبولين من ذوي الإعاقة لكل تخصص", disabilityRatioByProgram, useGenderColors);
 }
 
-function drawChart(id, label, dataObj, colors=null) {
+function drawChart(id, label, dataObj, useGenderColors = false) {
   const canvas = document.getElementById(id);
   if (!canvas) return;
   const ctx = canvas.getContext("2d");
   if (window[id + "_instance"]) window[id + "_instance"].destroy();
+
+  const colors = ["#1e88e5", "#c2185b"];
+  const bgColors = useGenderColors && Object.keys(dataObj).length > 1
+    ? Object.keys(dataObj).map((_, i) => colors[i % 2])
+    : '#42a5f5';
 
   window[id + "_instance"] = new Chart(ctx, {
     type: 'bar',
@@ -193,7 +198,7 @@ function drawChart(id, label, dataObj, colors=null) {
       datasets: [{
         label: label,
         data: Object.values(dataObj),
-        backgroundColor: colors || '#42a5f5'
+        backgroundColor: bgColors
       }]
     },
     options: {
