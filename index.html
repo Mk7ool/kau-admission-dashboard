@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -54,27 +53,31 @@
 
 <div class="cards" id="statsCards"></div>
 
-<div class="chart-container"><canvas id="assignedPerCollege"></canvas></div>
-<div class="chart-container"><canvas id="assignedPerProgram"></canvas></div>
-<div class="chart-container"><canvas id="assignedPerLocation"></canvas></div>
-<div class="chart-container"><canvas id="genderDistribution"></canvas></div>
+<div id="charts">
+  <div class="chart-container"><canvas id="assignedPerCollege"></canvas></div>
+  <div class="chart-container"><canvas id="assignedPerProgram"></canvas></div>
+  <div class="chart-container"><canvas id="assignedPerLocation"></canvas></div>
+  <div class="chart-container"><canvas id="genderDistribution"></canvas></div>
+  <div class="chart-container"><canvas id="minScorePerProgram"></canvas></div>
+</div>
 
 <script>
 let originalData = [];
 
-document.getElementById('upload').addEventListener('change', function(e) {
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    const data = new Uint8Array(e.target.result);
-    const workbook = XLSX.read(data, {type: 'array'});
-    const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const json = XLSX.utils.sheet_to_json(sheet);
-    originalData = json;
-    populateFilters(json);
-    generateDashboard(json);
-  };
-  reader.readAsArrayBuffer(e.target.files[0]);
-});
+const collegeFilter = document.getElementById('collegeFilter');
+const genderFilter = document.getElementById('genderFilter');
+const locationFilter = document.getElementById('locationFilter');
+const programFilter = document.getElementById('programFilter');
+
+function resetDashboard() {
+  document.getElementById("statsCards").innerHTML = "";
+  ["assignedPerCollege","assignedPerProgram","assignedPerLocation","genderDistribution","minScorePerProgram"].forEach(id => {
+    if (window[id + "_instance"]) {
+      window[id + "_instance"].destroy();
+      window[id + "_instance"] = null;
+    }
+  });
+}
 
 function populateFilters(data) {
   const collegeSet = new Set();
@@ -84,11 +87,14 @@ function populateFilters(data) {
   data.forEach(row => {
     if (row["الكلية"]) collegeSet.add(row["الكلية"]);
     if (row["الموقع"]) locationSet.add(row["الموقع"]);
-    if (row["التخصص"]) programSet.add(row["التخصص"]?.includes("عام") ? `${row["التخصص"]} (${row["الكلية"]})` : row["التخصص"]);
+    if (row["التخصص"]) programSet.add(row["التخصص"].includes("عام") ? `${row["التخصص"]} (${row["الكلية"]})` : row["التخصص"]);
   });
 
   const populate = (id, set) => {
     const select = document.getElementById(id);
+    const first = select.options[0];
+    select.innerHTML = "";
+    select.appendChild(first);
     [...set].sort().forEach(val => {
       const opt = document.createElement("option");
       opt.value = val;
@@ -102,58 +108,76 @@ function populateFilters(data) {
   populate("programFilter", programSet);
 }
 
+function filterAndGenerate() {
+  const filtered = originalData.filter(row =>
+    (!collegeFilter.value || row["الكلية"] === collegeFilter.value) &&
+    (!genderFilter.value || row["الجنس"] === genderFilter.value) &&
+    (!locationFilter.value || row["الموقع"] === locationFilter.value) &&
+    (!programFilter.value || (row["التخصص"]?.includes("عام") ? `${row["التخصص"]} (${row["الكلية"]})` : row["التخصص"]) === programFilter.value)
+  );
+  generateDashboard(filtered);
+}
+
 ["collegeFilter", "genderFilter", "locationFilter", "programFilter"].forEach(id => {
-  document.getElementById(id).addEventListener("change", () => {
-    let filtered = originalData.filter(row =>
-      (!collegeFilter.value || row["الكلية"] === collegeFilter.value) &&
-      (!genderFilter.value || row["الجنس"] === genderFilter.value) &&
-      (!locationFilter.value || row["الموقع"] === locationFilter.value) &&
-      (!programFilter.value || (row["التخصص"]?.includes("عام") ? `${row["التخصص"]} (${row["الكلية"]})` : row["التخصص"]) === programFilter.value)
-    );
-    generateDashboard(filtered);
-  });
+  document.getElementById(id).addEventListener("change", filterAndGenerate);
+});
+
+document.getElementById('upload').addEventListener('change', function(e) {
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const data = new Uint8Array(e.target.result);
+    const workbook = XLSX.read(data, {type: 'array'});
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const json = XLSX.utils.sheet_to_json(sheet);
+    
+    originalData = json;
+    populateFilters(json);
+    generateDashboard(json);
+  };
+  reader.readAsArrayBuffer(e.target.files[0]);
 });
 
 function generateDashboard(data) {
-  const stats = { totalAssigned: 0, totalCapacity: 0, minScore: Infinity, maleRequests: 0, femaleRequests: 0 };
-  const assignedByCollege = {}, assignedByProgram = {}, assignedByLocation = {};
+  resetDashboard();
+  const stats = { totalAccepted: 0, totalCapacity: 0, minScore: Infinity, maleAccepted: 0, femaleAccepted: 0 };
+  const acceptedByCollege = {}, acceptedByProgram = {}, acceptedByLocation = {}, minScoreByProgram = {};
 
   data.forEach(row => {
     const college = row["الكلية"];
     const program = row["التخصص"]?.includes("عام") ? `${row["التخصص"]} (${college})` : row["التخصص"];
     const location = row["الموقع"];
     const gender = row["الجنس"];
-    const assigned = +row["عدد المعينين"] || 0;
+    const accepted = +row["عدد المعينين"] || 0;
     const capacity = +row["السعة"] || 0;
     const score = +row["أقل نسبة موزونة"] || 0;
-    const requests = +row["عدد الطلبات"] || 0;
 
-    stats.totalAssigned += assigned;
+    if (!program) return;
+
+    stats.totalAccepted += accepted;
     stats.totalCapacity += capacity;
     if (score > 0 && score < stats.minScore) stats.minScore = score;
-    if (gender === "ذكر") stats.maleRequests += requests;
-    else if (gender === "أنثى") stats.femaleRequests += requests;
+    if (gender === "ذكر") stats.maleAccepted += accepted;
+    else if (gender === "أنثى") stats.femaleAccepted += accepted;
 
-    if (college) assignedByCollege[college] = (assignedByCollege[college] || 0) + assigned;
-    if (program) assignedByProgram[program] = (assignedByProgram[program] || 0) + assigned;
-    if (location) assignedByLocation[location] = (assignedByLocation[location] || 0) + assigned;
+    acceptedByCollege[college] = (acceptedByCollege[college] || 0) + accepted;
+    acceptedByProgram[program] = (acceptedByProgram[program] || 0) + accepted;
+    acceptedByLocation[location] = (acceptedByLocation[location] || 0) + accepted;
+    if (!minScoreByProgram[program] || score < minScoreByProgram[program]) minScoreByProgram[program] = score;
   });
 
   document.getElementById("statsCards").innerHTML = `
-    <div class="card"><h3>📦 عدد المعينين</h3><p>${stats.totalAssigned.toLocaleString()}</p></div>
-    <div class="card"><h3>🎯 نسبة الإشغال</h3><p>${stats.totalCapacity ? ((stats.totalAssigned / stats.totalCapacity) * 100).toFixed(1) + "%" : "-"}</p></div>
+    <div class="card"><h3>📦 عدد المقبولين</h3><p>${stats.totalAccepted.toLocaleString()}</p></div>
+    <div class="card"><h3>🎯 نسبة الإشغال</h3><p>${stats.totalCapacity ? ((stats.totalAccepted / stats.totalCapacity) * 100).toFixed(1) + "%" : "-"}</p></div>
     <div class="card"><h3>📉 أقل نسبة موزونة</h3><p>${isFinite(stats.minScore) ? stats.minScore.toFixed(2) : "-"}</p></div>
-    <div class="card"><h3>👨 الطلبات (ذكور)</h3><p style="color: #1e88e5;">${stats.maleRequests.toLocaleString()}</p></div>
-    <div class="card"><h3>👩 الطلبات (إناث)</h3><p style="color: #c2185b;">${stats.femaleRequests.toLocaleString()}</p></div>
+    <div class="card"><h3>👨 المقبولين طلاب</h3><p style="color: #1e88e5;">${stats.maleAccepted.toLocaleString()}</p></div>
+    <div class="card"><h3>👩 المقبولين طالبات</h3><p style="color: #c2185b;">${stats.femaleAccepted.toLocaleString()}</p></div>
   `;
 
-  drawChart("assignedPerCollege", "عدد المعينين حسب الكلية", assignedByCollege);
-  drawChart("assignedPerProgram", "عدد المعينين حسب التخصص", assignedByProgram);
-  drawChart("assignedPerLocation", "عدد المعينين حسب الموقع", assignedByLocation);
-  drawChart("genderDistribution", "توزيع الطلبات حسب الجنس", {
-    "ذكور": stats.maleRequests,
-    "إناث": stats.femaleRequests
-  }, ["#1e88e5", "#c2185b"]);
+  drawChart("assignedPerCollege", "عدد المقبولين حسب الكلية", acceptedByCollege);
+  drawChart("assignedPerProgram", "عدد المقبولين حسب التخصص", acceptedByProgram);
+  drawChart("assignedPerLocation", "عدد المقبولين حسب الموقع", acceptedByLocation);
+  drawChart("genderDistri
+  drawChart("minScorePerProgram", "أقل نسبة موزونة لكل تخصص", minScoreByProgram);
 }
 
 function drawChart(id, label, dataObj, colors=null) {
